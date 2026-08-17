@@ -1,0 +1,6 @@
+# dsh-no-white-rice-allowed bundle 层：插入峰时拦截器插件行。
+# 通过 dsh plugin add 安装后由 profile 的 bundles 层栈在启动时自动装配。
+- insert:
+    - id: dsh-no-white-rice-allowed
+      name: '@dsh-external/dsh-no-white-rice-allowed'
+      config: {}
