@@ -51,8 +51,9 @@ dsh plugin --profile web add link:E:\DeepSleep\dshNoWhiteRiceAllowed\dsh-No-whit
 `dsh.profile.bundles` 层栈。**重启 harness 后**由 bundle 装配自动加载插件行
 （`cordis.patch.yml`），host + client 同时生效。
 
-支持的其他参数形态：registry 包名（发布后 `dsh plugin --profile web add @dsh-external/dsh-no-white-rice-allowed`）、
-git 地址、tgz 路径、相对路径（相对你执行命令的目录）。
+支持的其他参数形态：发布物（Release 附件 tgz 路径或 URL、git 地址）、相对路径
+（相对你执行命令的目录）。例如发布到 GitHub Release 后：
+`dsh plugin --profile web add link:https://github.com/dubykun888/dsh-No-white-rice-allowed/releases/download/v0.0.1/dsh-external-dsh-no-white-rice-allowed-0.0.1.tgz`
 
 ### 方式三：运行时注入（免重启，适合临时试用）
 
