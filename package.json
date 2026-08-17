@@ -7,7 +7,9 @@
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml",
+    "scripts/build.sh"
   ],
   "license": "BSD-3-Clause",
   "peerDependencies": {
