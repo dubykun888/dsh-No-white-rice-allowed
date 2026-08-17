@@ -17,50 +17,58 @@ chat/completions）发起大模型请求之前，检测请求时刻的**北京�
 
 ---
 
-## 安装
+## 安装（GitHub Release 直装，无需构建）
+
+**安装来源**：GitHub Release 附件 tgz（已包含构建好的 `lib/` + `cordis.patch.yml`
++ bundle 声明，解压即用，**不需要重新构建**）：
+
+```
+https://github.com/dubykun888/dsh-No-white-rice-allowed/releases/download/v0.0.1/dsh-external-dsh-no-white-rice-allowed-0.0.1.tgz
+```
+
+> 🌐 网络提示：GitHub 直连失败时，给下载命令加上代理（本机常用
+> `-Proxy http://127.0.0.1:7892`），或直接在浏览器下载 tgz 后按"方式三"安装。
 
 ### 方式一：dsh 内部指令（推荐，无需命令行）
 
-在 DSH Web GUI 的会话输入框里，直接把下面的文本指令发给 agent（它会用
-`dev_install_package` 完成 bundle 持久安装，免重启热装配，重启后仍由
-`dsh.profile.bundles` 自动装配）：
+在 DSH Web GUI 的会话输入框里，直接把下面的文本指令发给 agent（它会下载
+Release tgz → 解压 → 用 `dev_install_package` 完成 bundle 持久安装，免重启
+热装配，重启后仍由 `dsh.profile.bundles` 自动装配）：
 
 ```
-请用 dev_install_package 安装插件 E:\DeepSleep\dshNoWhiteRiceAllowed\dsh-No-white-rice-allowed 到 web profile
+请从 https://github.com/dubykun888/dsh-No-white-rice-allowed/releases/download/v0.0.1/dsh-external-dsh-no-white-rice-allowed-0.0.1.tgz 下载插件包并解压到工作区（注意 tgz 内是 package/ 目录），然后用 dev_install_package 安装解压出的 package 目录，安装到 web profile
 ```
 
-或更简单的口语化指令：
+或更简单的口语化指令（agent 会自动完成下载→解压→安装）：
 
 ```
-帮我安装插件 E:\DeepSleep\dshNoWhiteRiceAllowed\dsh-No-white-rice-allowed（持久 bundle 安装）
+帮我从 GitHub Release 下载并安装 dsh-no-white-rice-allowed 插件（v0.0.1，tgz 直装，无需构建）
 ```
 
-### 方式二：dsh CLI 命令行
+### 方式二：dsh CLI 命令行（从 Release 附件直接安装）
 
-前置要求：`pnpm` 在 PATH（`npm i -g pnpm` 或 corepack 启用；本机可从
-`E:\DeepSleep\dshNoWhiteRiceAllowed\tools\node_modules\.bin` 取用）。
+前置要求：`pnpm` 在 PATH（`npm i -g pnpm` 或 corepack 启用）。
 
 ```bash
-# 从插件目录的父级执行（或直接用绝对路径）
-dsh plugin --profile web add link:E:\DeepSleep\dshNoWhiteRiceAllowed\dsh-No-white-rice-allowed
+dsh plugin --profile web add https://github.com/dubykun888/dsh-No-white-rice-allowed/releases/download/v0.0.1/dsh-external-dsh-no-white-rice-allowed-0.0.1.tgz
 ```
 
-`dsh plugin` 会：① 初始化 profile → ② 在 profile 目录转发给
-`pnpm add link:<目录>`（写入 `dependencies` + 建立 node_modules junction）→
+`dsh plugin` 会：① 初始化 profile → ② 在 profile 目录转发给 `pnpm add <tgz URL>`
+（下载 tgz → 解压 → 写入 `dependencies` + 建立 node_modules junction）→
 ③ 自动 reconcile：识别到插件声明的 `dsh.bundle.patch`，把它追加进
 `dsh.profile.bundles` 层栈。**重启 harness 后**由 bundle 装配自动加载插件行
 （`cordis.patch.yml`），host + client 同时生效。
 
-支持的其他参数形态：发布物（Release 附件 tgz 路径或 URL、git 地址）、相对路径
-（相对你执行命令的目录）。例如发布到 GitHub Release 后：
-`dsh plugin --profile web add link:https://github.com/dubykun888/dsh-No-white-rice-allowed/releases/download/v0.0.1/dsh-external-dsh-no-white-rice-allowed-0.0.1.tgz`
+> 已手动下载了 tgz 的，也可以用本地文件：`dsh plugin --profile web add link:E:\path\to\dsh-external-dsh-no-white-rice-allowed-0.0.1.tgz`
 
-### 方式三：运行时注入（免重启，适合临时试用）
+### 方式三：手动下载 + 运行时注入（免重启，适合临时试用）
 
-在 GUI 会话里对 agent 说：
+1. 浏览器下载上面 URL 的 tgz（或用 PowerShell：`Invoke-WebRequest -Uri <URL> -Proxy http://127.0.0.1:7892 -OutFile dsh-no-white-rice-allowed.tgz`）
+2. 解压：`tar -xf dsh-no-white-rice-allowed.tgz`（得到 `package/` 目录）
+3. 在 GUI 会话里对 agent 说：
 
 ```
-请用 dev_inject_plugin 注入 E:\DeepSleep\dshNoWhiteRiceAllowed\dsh-No-white-rice-allowed
+请用 dev_inject_plugin 注入 <解压出的 package 目录路径>
 ```
 
 `dev_inject_plugin` 立即注入（host+UI 同时生效，无需重启）；注入清单持久化，
@@ -111,15 +119,15 @@ curl http://127.0.0.1:3080/no-white-rice/api/status
 
 未配置时默认值在 `apply` 内兜底（loader 可能传空 config）。
 
-## 构建与打包
+## 构建与打包（仅维护者需要）
 
 ```bash
-# 依赖链接（junction 到运行时 node_modules）后：
-npx tsc -p tsconfig.json        # host → lib/index.js（零外部 import）
-npm run build:client            # client → lib/client.js（ModuleLoader 格式）
-npm pack                        # 产出 dsh-external-dsh-no-white-rice-allowed-<version>.tgz
+npm install --legacy-peer-deps   # 安装 typescript / tsdown / @types/node
+npx tsc -p tsconfig.json         # host → lib/index.js（零外部 import，自包含构建）
+npm run build:client             # client → lib/client.js（ModuleLoader 格式）
+npm pack                         # 产出 dsh-external-dsh-no-white-rice-allowed-<version>.tgz
 ```
 
 发布：在 GitHub 仓库 `dubykun888/dsh-No-white-rice-allowed` 创建 Release
-（tag `v0.0.1`），把 tgz 作为附件上传；发布后即可用 registry 方式安装：
-`dsh plugin --profile web add @dsh-external/dsh-no-white-rice-allowed`。
+（tag `v0.0.1`），把 tgz 作为附件上传。用户安装时直接使用 Release 附件 URL
+（见上文「安装」章节），**无需重新构建**。
