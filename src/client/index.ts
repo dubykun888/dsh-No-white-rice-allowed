@@ -129,17 +129,28 @@ async function fetchStatus(): Promise<any | null> {
   }
 }
 
+/** 模块级共享缓存：apply 预取一次，组件挂载即有值（避免首次渲染等待/闪隐）。 */
+let cachedStatus: any = null
+let cachedAt = 0
+async function fetchStatusShared(force = false): Promise<any | null> {
+  if (!force && cachedStatus !== null && Date.now() - cachedAt < 1500) return cachedStatus
+  const d = await fetchStatus()
+  if (d !== null) {
+    cachedStatus = d
+    cachedAt = Date.now()
+  }
+  return cachedStatus
+}
+
 /** ═══ 对话框右上角指示器：仅 DeepSeek 官方模型时显示；图标+文本整体右对齐 ═══ */
 function BadgeComponent() {
-  const [busy, setBusy] = useState(false)
-  const [visible, setVisible] = useState(false)
+  const [snap, setSnap] = useState<any>(cachedStatus)
   useEffect(() => {
     let alive = true
     const poll = (): void => {
-      void fetchStatus().then((d) => {
+      void fetchStatusShared(true).then((d) => {
         if (!alive) return
-        setVisible(d?.ok === true && d?.lastRoute?.provider === 'deepseek-official')
-        setBusy(d?.isBusy === true)
+        setSnap((old: any) => (d !== null ? d : old))
       })
     }
     poll()
@@ -149,13 +160,19 @@ function BadgeComponent() {
       window.clearInterval(timer)
     }
   }, [])
+  // 状态未加载（snap === null）时也显示（首包 1.5s 内到达后精确控制）；
+  // 已加载但非 DeepSeek 官方来源 → 隐藏。
+  const visible = snap === null || (snap?.ok === true && snap?.lastRoute?.provider === 'deepseek-official')
   if (!visible) return null
+  const busy = snap?.isBusy === true
+  const hint = snap?.ok === true ? `model=${snap.lastRoute?.model ?? '?'} isBusy=${snap.isBusy ?? '?'} weekday=${snap.weekday ?? '?'}` : 'status-loading'
   return h('div', {
     style: {
       display: 'flex', alignItems: 'center', gap: 5,
       fontSize: 11, lineHeight: 1.2, whiteSpace: 'nowrap', userSelect: 'none',
       color: 'var(--theme-text-secondary,#999)', marginLeft: 'auto',
     },
+    title: hint,
   },
     h('img', { src: '/no-white-rice/api/icon', alt: '', style: { width: 16, height: 16, borderRadius: 3, flex: 'none', display: 'block' } }),
     h('span', { style: { display: 'inline-flex', alignItems: 'baseline', gap: 2, fontWeight: 600, fontSize: 11 } },
@@ -233,6 +250,9 @@ function StatusPanel() {
 export const inject = ['slots']
 
 export function apply(ctx: ClientContext): void {
+  // 预取状态：组件挂载前即有快照（指示器无首包等待）
+  void fetchStatusShared(true)
+
   // ═══ 对话框右上角指示器（仅 DeepSeek 官方模型显示；React 组件经 slots 渲染）═══
   ctx.effect(() => ctx.slots.inject('conversation.input.right', () =>
     ctx.slots.register({
