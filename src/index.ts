@@ -87,6 +87,7 @@ function normalizeConfig(config: unknown): {
 type AppContext = {
   on(event: string, listener: (...args: any[]) => unknown): () => void
   effect(fn: () => unknown, label?: string): unknown
+  inject(services: string[], callback: (ctx: any) => void): void
   webServer: {
     register(route: {
       kind: 'exact' | 'prefix' | 'upgrade'
@@ -98,6 +99,20 @@ type AppContext = {
 }
 
 export function apply(ctx: AppContext, config: unknown): void {
+  // ═══ client 模块表自愈：host 热重载（dev_reload_package）会丢失 client-modules 行，
+  // 导致 /plugins/<id>/client.js 404、浏览器拉不到 UI。插件启动时重新注册并通知浏览器。 ═══
+  ctx.inject(['clientModules'], (c: any) => {
+    try {
+      const cm = c.clientModules
+      if (cm?.processOne?.(name)) {
+        if (cm.compose) cm.composed = cm.compose()
+        cm.notifyGraphChanged?.()
+        cm.rebuilt?.(name)
+        ctx.logger?.info?.(`[${name}] client 模块表已自愈（processOne + rebuilt）`)
+      }
+    } catch { /* 自愈失败不阻塞插件 */ }
+  })
+
   const { message, peaks, weekdaysOnly } = normalizeConfig(config)
 
   // ═══ 设置档持久化（enabled 运行时开关，重启后保持）═══
