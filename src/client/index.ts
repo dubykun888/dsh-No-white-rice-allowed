@@ -1,9 +1,11 @@
 /**
  * @dsh-external/dsh-no-white-rice-allowed — client 弹窗端。
  *
- * 职责：轮询 host 的 `/no-white-rice/api/status`，发现"新的"峰时拦截记录时
- * 立即弹出错误提示（红色 toast："error：大肥鱼在吃白饭！"）；同时在设置页
- * 提供一个状态面板（峰时/非峰时、拦截次数、最近拦截时刻）。
+ * 职责：
+ *  - 轮询 host 的 `/no-white-rice/api/status`，发现"新的"峰时拦截记录时立即弹出
+ *    错误提示（红色 toast："error：大肥鱼在吃白饭！"）。
+ *  - 设置页「白饭禁令」面板：启用/关闭开关（POST /no-white-rice/api/settings，
+ *    运行时生效并持久化）+ 实时状态（工作日/当前时段/拦截次数/最近拦截）。
  *
  * 构建：npm run build:client（tsdown，产物 lib/client.js，ModuleLoader.load 注册）。
  * ⚠️ 必坑（2026-08 实测）：① apply 用 ctx.slots 必须 export const inject
@@ -18,6 +20,7 @@ type ClientContext = {
 
 /** host 端状态路由（与 src/index.ts 的 API_PREFIX 一致）。 */
 const API_STATUS = '/no-white-rice/api/status'
+const API_SETTINGS = '/no-white-rice/api/settings'
 /** 轮询间隔。 */
 const POLL_MS = 2000
 /** 弹窗自动消失时长。 */
@@ -110,23 +113,65 @@ async function poll(): Promise<void> {
   }
 }
 
-/** 设置页状态面板：每秒刷新一次。 */
+/** 设置页「白饭禁令」面板：开关（稳定结构）+ 状态行（每秒刷新）。 */
 function renderStatusPanel(container: HTMLElement): () => void {
+  // ═══ 开关行（静态结构，不被刷新重建）═══
+  const switchRow = document.createElement('label')
+  switchRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;user-select:none'
+  const toggle = document.createElement('input')
+  toggle.type = 'checkbox'
+  toggle.style.cssText = 'width:16px;height:16px;accent-color:#e5484d;cursor:pointer'
+  const toggleLabel = document.createElement('span')
+  toggleLabel.textContent = '启用峰时拦截（关闭：全时段不生效）'
+  toggleLabel.style.cssText = 'font-weight:600;color:var(--theme-text,#ddd)'
+  const toggleState = document.createElement('span')
+  toggleState.style.cssText = 'font-size:11px;color:var(--theme-text-secondary,#999)'
+  switchRow.append(toggle, toggleLabel, toggleState)
+
+  toggle.addEventListener('change', () => {
+    toggle.disabled = true
+    toggleState.textContent = '保存中…'
+    void fetch(API_SETTINGS, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: toggle.checked }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        toggleState.textContent = d?.ok ? '已保存' : '保存失败'
+        if (d?.ok) toggle.checked = d.enabled === true
+      })
+      .catch(() => {
+        toggleState.textContent = '保存失败'
+        toggle.checked = !toggle.checked
+      })
+      .finally(() => {
+        toggle.disabled = false
+        window.setTimeout(() => { toggleState.textContent = '' }, 2500)
+      })
+  })
+
+  // ═══ 状态行（每秒刷新）═══
+  const rowsBox = document.createElement('div')
   const refresh = (): void => {
     void fetch(API_STATUS, { headers: { accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d?.ok) return
+        toggle.checked = d.enabled === true
+        const weekdaysOnly = d.weekdaysOnly === true
+        const today = d.weekday ? '工作日（周一至周五）' : '周末（全天谷价，放行）'
+        const busy = d.isBusy === true
         const rows: [string, string][] = [
-          ['总开关', d.enabled ? '开（拦截中）' : '关（放行）'],
-          ['当前北京时间', String(d.beijingTime ?? '--:--')],
-          ['当前时段', d.peak ? '峰时 ⚠️ 请求将被拦截' : '非峰时（放行）'],
+          ['当前北京时间', `${String(d.beijingTime ?? '--:--')}（${today}）`],
+          ['当前时段', busy ? '峰时 ⚠️ 请求将被拦截' : '非峰时 / 周末 / 已关闭（放行）'],
+          ['生效范围', weekdaysOnly ? '仅工作日（周末全天谷价放行）' : '全天'],
           ['峰时窗口', Array.isArray(d.peaks) ? d.peaks.map((p: number[]) => `${p[0]}:00-${p[1]}:00`).join('、') : '9:00-12:00、14:00-18:00'],
           ['拦截次数', String(d.blockedCount ?? 0)],
           ['最近拦截', d.blocked ? `${d.blocked.beijingTime}（${new Date(d.blocked.at).toLocaleTimeString()}）` : '无'],
           ['提示文案', String(d.message ?? '')],
         ]
-        container.textContent = ''
+        rowsBox.textContent = ''
         for (const [k, v] of rows) {
           const row = document.createElement('div')
           row.style.cssText = 'display:flex;gap:8px;padding:3px 0'
@@ -137,11 +182,13 @@ function renderStatusPanel(container: HTMLElement): () => void {
           val.textContent = v
           val.style.cssText = 'flex:1;color:var(--theme-text,#ddd);word-break:break-all'
           row.append(key, val)
-          container.appendChild(row)
+          rowsBox.appendChild(row)
         }
       })
       .catch(() => {})
   }
+
+  container.append(switchRow, rowsBox)
   refresh()
   const timer = window.setInterval(refresh, 1000)
   return () => window.clearInterval(timer)

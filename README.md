@@ -6,14 +6,17 @@
 
 在 DeepSeek Harness 向 DeepSeek 官方 API（`deepseek-official` provider 的
 chat/completions）发起大模型请求之前，检测请求时刻的**北京时间**；若处于峰时
-（默认 `9:00-12:00`、`14:00-18:00`），立即**打断**该请求（请求不会发往
-`api.deepseek.com`），并弹出错误提示：
+（默认 `9:00-12:00`、`14:00-18:00`）且为**工作日（周一至周五）**，立即**打断**该请求
+（请求不会发往 `api.deepseek.com`），并弹出错误提示：
 
 > **error：大肥鱼在吃白饭！**
 
-⚠️ **峰时内安装后立即生效**：当前若处于峰时（北京时间 9:00-12:00、14:00-18:00），
+- **周末（周六、周日）全天谷价，自动放行**（不拦截）
+- 设置页「白饭禁令」面板提供**总开关**：关闭时全时段不生效（运行时生效并持久化，重启保持）
+
+⚠️ **峰时内安装后立即生效**：工作日若处于峰时（北京时间 9:00-12:00、14:00-18:00），
 安装完成后的所有 DeepSeek 请求都会被拦截（包括你自己发消息），12:00 / 18:00 后
-自动放行。建议在非峰时安装，或安装后直接进入验证流程。
+自动放行。可在「白饭禁令」面板关闭开关临时放行。
 
 ---
 
@@ -80,13 +83,14 @@ dsh plugin --profile web add https://github.com/dubykun888/dsh-No-white-rice-all
 
 ```bash
 curl http://127.0.0.1:3080/no-white-rice/api/status
-# {"ok":true,"enabled":true,"message":"error：大肥鱼在吃白饭！","peak":true,
-#  "beijingTime":"09:39","peaks":[[9,12],[14,18]],"blockedCount":1,"blocked":{...}}
+# {"ok":true,"enabled":true,"message":"error：大肥鱼在吃白饭！","weekdaysOnly":true,"peak":true,
+#  "weekday":true,"dayOfWeek":1,"isBusy":true,"beijingTime":"09:39","peaks":[[9,12],[14,18]],...}
 ```
 
-- `peak: true` = 当前处于峰时，请求将被拦截
+- `isBusy: true` = 当前（开关开 + 工作日 + 峰时）会被拦截
+- `weekday: false`（周末）= 全天谷价放行，即使处于峰时也不拦截
 - 峰时内发任何消息：请求被拦截，会话显示错误 + 页面弹出红色 toast
-- 设置页 →「白饭禁令」面板可看实时状态（需刷新页面加载 client 端）
+- 设置页 →「白饭禁令」面板可开关拦截、看实时状态（需刷新页面加载 client 端）
 
 ---
 
@@ -105,15 +109,18 @@ curl http://127.0.0.1:3080/no-white-rice/api/status
 | --- | --- |
 | Host 拦截 | 监听 `llm/stream` waterfall 事件（`ctx.waterfall(..., 'llm/stream', options, () => adapterStream(...))`）。监听器抛错即中断整条请求链，且发生在任何 HTTP 请求发出之前——覆盖主会话、子代理、goal 循环等全部调用路径。 |
 | 峰时判定 | `Date.now() + 8h` 取 UTC 字段换算北京时间（UTC+8），窗口 `[start, end)` 含起点不含终点。 |
-| 状态路由 | `GET /no-white-rice/api/status` 返回 `{ ok, enabled, message, peak, beijingTime, peaks, blockedCount, blocked }`。 |
+| 工作日判定 | 同一北京时间计算星期几（`getUTCDay()`，0=周日…6=周六），仅工作日（周一至周五）拦截；周末全天谷价放行。 |
+| 状态路由 | `GET /no-white-rice/api/status` 返回 `{ ok, enabled, message, weekdaysOnly, peak, weekday, dayOfWeek, isBusy, beijingTime, peaks, blockedCount, blocked }`。 |
+| 设置路由 | `POST /no-white-rice/api/settings`（JSON `{ enabled }`）运行时开/关拦截，持久化到 `<DSH_HOME>/super-injector/dsh-no-white-rice-allowed.json`。 |
 | Client 弹窗 | 每 2s 轮询状态路由，发现新的拦截记录即弹出红色错误 toast（8s 自动消失，可点击关闭）。 |
-| 设置面板 | 设置页新增「白饭禁令」面板：总开关、当前北京时间、当前时段、峰时窗口、拦截次数、最近拦截、提示文案。 |
+| 设置面板 | 设置页「白饭禁令」面板：启用/关闭开关 + 实时状态（北京时间/星期、生效范围、峰时窗口、拦截次数、最近拦截、提示文案）。 |
 
 ## 配置（cordis 插件行 config）
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 总开关；`false` 放行所有请求 |
+| `enabled` | `true` | 总开关初值；`false` 全时段放行（设置页开关可运行时修改并持久化） |
+| `weekdaysOnly` | `true` | 仅工作日（周一至周五）拦截；周末全天谷价放行 |
 | `message` | `error：大肥鱼在吃白饭！` | 拦截时抛出的错误提示文案 |
 | `peaks` | `[[9,12],[14,18]]` | 峰时窗口（北京时间 `[开始小时, 结束小时)`，可多个） |
 
