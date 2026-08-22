@@ -1,20 +1,28 @@
 /**
- * @dsh-external/dsh-no-white-rice-allowed — client 弹窗端。
+ * @dsh-external/dsh-no-white-rice-allowed — client 弹窗端（React 组件）。
  *
  * 职责：
- *  - 轮询 host 的 `/no-white-rice/api/status`，发现"新的"峰时拦截记录时立即弹出
- *    错误提示（红色 toast："error：大肥鱼在吃白饭！"）。
+ *  - 对话框右上角指示器（conversation.input.right）：DeepSeek 图标 + 文本
+ *    「现在是：梁文峰！」（梁文峰标红，被阻止）/「现在是：梁文谷！」（放行）；
+ *    仅当最近请求使用 DeepSeek 官方来源模型时显示；文本+图标整体右对齐。
  *  - 设置页「白饭禁令」面板：启用/关闭开关（POST /no-white-rice/api/settings，
- *    运行时生效并持久化）+ 实时状态（工作日/当前时段/拦截次数/最近拦截）。
+ *    运行时生效并持久化）+ 实时状态。
+ *  - 全局轮询 host 状态，发现新的拦截记录即弹出红色错误 toast。
  *
  * 构建：npm run build:client（tsdown，产物 lib/client.js，ModuleLoader.load 注册）。
- * ⚠️ 必坑（2026-08 实测）：① apply 用 ctx.slots 必须 export const inject
- * = ['slots']；② register 必须带 name 字段（= slot 名）。
+ * ⚠️ 必坑（2026-08 实测）：① slots 渲染器是纯 React——组件必须用 React
+ * createElement（无 JSX 转换）；② apply 用 ctx.slots 必须 export const inject
+ * = ['slots']；③ register 必须带 name 字段（= slot 名）。
  */
-import type { SlotsService } from '@deepseek-ai/dsh-client-ui-slots'
+import { createElement, useEffect, useState } from 'react'
+
+const h = createElement
 
 type ClientContext = {
-  slots: SlotsService
+  slots: {
+    inject(key: string, callback: () => unknown): () => void
+    register(options: Record<string, unknown>, component?: unknown): () => void
+  }
   effect(fn: () => unknown, label?: string): unknown
 }
 
@@ -28,14 +36,14 @@ const TOAST_MS = 8000
 
 /** 已弹过窗的拦截时间戳（去重游标）。 */
 let lastSeenAt = 0
-/** 当前挂着的弹窗元素。 */
-let activeToast: HTMLElement | null = null
 
-/** 弹出错误提示（红色居中 toast，可点击关闭，8s 自动消失）。 */
+/** 弹出错误提示（红色居中 toast，可点击关闭，8s 自动消失；纯 DOM，不依赖 React）。 */
 function showToast(message: string): void {
-  if (activeToast) activeToast.remove()
+  const existing = document.getElementById('nwr-toast')
+  if (existing) existing.remove()
 
   const overlay = document.createElement('div')
+  overlay.id = 'nwr-toast'
   overlay.setAttribute('role', 'alert')
   overlay.style.cssText = [
     'position:fixed',
@@ -80,16 +88,11 @@ function showToast(message: string): void {
   box.append(icon, body)
   overlay.append(box)
   document.body.appendChild(overlay)
-  activeToast = overlay
 
-  const dismiss = (): void => {
-    overlay.remove()
-    if (activeToast === overlay) activeToast = null
-  }
+  const dismiss = (): void => overlay.remove()
   overlay.addEventListener('click', dismiss)
   window.setTimeout(dismiss, TOAST_MS)
 
-  // 样式表（动画）一次性挂载
   if (!document.getElementById('nwr-toast-style')) {
     const style = document.createElement('style')
     style.id = 'nwr-toast-style'
@@ -98,130 +101,158 @@ function showToast(message: string): void {
   }
 }
 
-/** 轮询 host 状态；发现新拦截记录即弹窗。 */
-async function poll(): Promise<void> {
-  try {
-    const resp = await fetch(API_STATUS, { headers: { accept: 'application/json' } })
-    if (!resp.ok) return
-    const data = await resp.json()
-    if (data?.ok && data.blocked && typeof data.blocked.at === 'number' && data.blocked.at > lastSeenAt) {
-      lastSeenAt = data.blocked.at
-      showToast(String(data.blocked.message ?? 'error：大肥鱼在吃白饭！'))
-    }
-  } catch {
-    /* 静默：host 路由尚未就绪或插件已被卸载 */
-  }
-}
-
-/** 设置页「白饭禁令」面板：开关（稳定结构）+ 状态行（每秒刷新）。 */
-function renderStatusPanel(container: HTMLElement): () => void {
-  // ═══ 开关行（静态结构，不被刷新重建）═══
-  const switchRow = document.createElement('label')
-  switchRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;user-select:none'
-  const toggle = document.createElement('input')
-  toggle.type = 'checkbox'
-  toggle.style.cssText = 'width:16px;height:16px;accent-color:#e5484d;cursor:pointer'
-  const toggleLabel = document.createElement('span')
-  toggleLabel.textContent = '启用峰时拦截（关闭：全时段不生效）'
-  toggleLabel.style.cssText = 'font-weight:600;color:var(--theme-text,#ddd)'
-  const toggleState = document.createElement('span')
-  toggleState.style.cssText = 'font-size:11px;color:var(--theme-text-secondary,#999)'
-  switchRow.append(toggle, toggleLabel, toggleState)
-
-  toggle.addEventListener('change', () => {
-    toggle.disabled = true
-    toggleState.textContent = '保存中…'
-    void fetch(API_SETTINGS, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled: toggle.checked }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        toggleState.textContent = d?.ok ? '已保存' : '保存失败'
-        if (d?.ok) toggle.checked = d.enabled === true
-      })
-      .catch(() => {
-        toggleState.textContent = '保存失败'
-        toggle.checked = !toggle.checked
-      })
-      .finally(() => {
-        toggle.disabled = false
-        window.setTimeout(() => { toggleState.textContent = '' }, 2500)
-      })
-  })
-
-  // ═══ 状态行（每秒刷新）═══
-  const rowsBox = document.createElement('div')
-  const refresh = (): void => {
+/** 全局轮询：新拦截记录 → 弹窗（apply 时启动，纯 DOM，不依赖 React）。 */
+function startToastPoll(): () => void {
+  const poll = (): void => {
     void fetch(API_STATUS, { headers: { accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!d?.ok) return
-        toggle.checked = d.enabled === true
-        const weekdaysOnly = d.weekdaysOnly === true
-        const today = d.weekday ? '工作日（周一至周五）' : '周末（全天谷价，放行）'
-        const busy = d.isBusy === true
-        const rows: [string, string][] = [
-          ['当前北京时间', `${String(d.beijingTime ?? '--:--')}（${today}）`],
-          ['当前时段', busy ? '峰时 ⚠️ 请求将被拦截' : '非峰时 / 周末 / 已关闭（放行）'],
-          ['生效范围', weekdaysOnly ? '仅工作日（周末全天谷价放行）' : '全天'],
-          ['峰时窗口', Array.isArray(d.peaks) ? d.peaks.map((p: number[]) => `${p[0]}:00-${p[1]}:00`).join('、') : '9:00-12:00、14:00-18:00'],
-          ['拦截次数', String(d.blockedCount ?? 0)],
-          ['最近拦截', d.blocked ? `${d.blocked.beijingTime}（${new Date(d.blocked.at).toLocaleTimeString()}）` : '无'],
-          ['提示文案', String(d.message ?? '')],
-        ]
-        rowsBox.textContent = ''
-        for (const [k, v] of rows) {
-          const row = document.createElement('div')
-          row.style.cssText = 'display:flex;gap:8px;padding:3px 0'
-          const key = document.createElement('span')
-          key.textContent = k + ':'
-          key.style.cssText = 'flex:none;width:110px;color:var(--theme-text-secondary,#999)'
-          const val = document.createElement('span')
-          val.textContent = v
-          val.style.cssText = 'flex:1;color:var(--theme-text,#ddd);word-break:break-all'
-          row.append(key, val)
-          rowsBox.appendChild(row)
+        if (d?.ok && d.blocked && typeof d.blocked.at === 'number' && d.blocked.at > lastSeenAt) {
+          lastSeenAt = d.blocked.at
+          showToast(String(d.blocked.message ?? 'error：大肥鱼在吃白饭！'))
         }
       })
+      .catch(() => { /* host 路由未就绪或插件被卸载 */ })
+  }
+  poll()
+  const timer = window.setInterval(poll, POLL_MS)
+  return () => window.clearInterval(timer)
+}
+
+/** 拉取 status 快照（失败返回 null）。 */
+async function fetchStatus(): Promise<any | null> {
+  try {
+    const r = await fetch(API_STATUS, { headers: { accept: 'application/json' } })
+    return r.ok ? r.json() : null
+  } catch {
+    return null
+  }
+}
+
+/** ═══ 对话框右上角指示器：仅 DeepSeek 官方模型时显示；图标+文本整体右对齐 ═══ */
+function BadgeComponent() {
+  const [busy, setBusy] = useState(false)
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    let alive = true
+    const poll = (): void => {
+      void fetchStatus().then((d) => {
+        if (!alive) return
+        setVisible(d?.ok === true && d?.lastRoute?.provider === 'deepseek-official')
+        setBusy(d?.isBusy === true)
+      })
+    }
+    poll()
+    const timer = window.setInterval(poll, 1200)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [])
+  if (!visible) return null
+  return h('div', {
+    style: {
+      display: 'flex', alignItems: 'center', gap: 5,
+      fontSize: 11, lineHeight: 1.2, whiteSpace: 'nowrap', userSelect: 'none',
+      color: 'var(--theme-text-secondary,#999)', marginLeft: 'auto',
+    },
+  },
+    h('img', { src: '/no-white-rice/api/icon', alt: '', style: { width: 16, height: 16, borderRadius: 3, flex: 'none', display: 'block' } }),
+    h('span', { style: { display: 'inline-flex', alignItems: 'baseline', gap: 2, fontWeight: 600, fontSize: 11 } },
+      '现在是：',
+      h('span', { style: { color: busy ? '#e5484d' : 'var(--theme-accent,#4a9eff)', fontWeight: 700 } },
+        busy ? '梁文峰！' : '梁文谷！'),
+    ),
+  )
+}
+
+/** ═══ 设置页「白饭禁令」面板：开关 + 实时状态 ═══ */
+function StatusPanel() {
+  const [snap, setSnap] = useState<any>(null)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    let alive = true
+    const refresh = (): void => {
+      void fetchStatus().then((d) => {
+        if (alive && d?.ok) setSnap(d)
+      })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 1000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const onToggle = (e: any): void => {
+    const next = e.target.checked
+    setSaving(true)
+    void fetch(API_SETTINGS, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.ok) setSnap((old: any) => (old ? { ...old, enabled: d.enabled === true } : old))
+      })
       .catch(() => {})
+      .finally(() => setSaving(false))
   }
 
-  container.append(switchRow, rowsBox)
-  refresh()
-  const timer = window.setInterval(refresh, 1000)
-  return () => window.clearInterval(timer)
+  const rows: [string, string][] = snap
+    ? [
+        ['当前北京时间', `${String(snap.beijingTime ?? '--:--')}（${snap.weekday === true ? '工作日（周一至周五）' : '周末（全天谷价，放行）'}）`],
+        ['当前时段', snap.isBusy === true ? '峰时 ⚠️ 请求将被拦截' : '非峰时 / 周末 / 已关闭（放行）'],
+        ['生效范围', snap.weekdaysOnly === true ? '仅工作日（周末全天谷价放行）' : '全天'],
+        ['峰时窗口', Array.isArray(snap.peaks) ? snap.peaks.map((p: number[]) => `${p[0]}:00-${p[1]}:00`).join('、') : '9:00-12:00、14:00-18:00'],
+        ['拦截次数', String(snap.blockedCount ?? 0)],
+        ['最近拦截', snap.blocked ? `${snap.blocked.beijingTime}（${new Date(snap.blocked.at).toLocaleTimeString()}）` : '无'],
+        ['提示文案', String(snap.message ?? '')],
+      ]
+    : [['（加载中…）', '']]
+
+  const row = (k: string, v: string): any => h('div', { style: { display: 'flex', gap: 8, padding: '3px 0' } },
+    h('span', { style: { flex: 'none', width: 110, color: 'var(--theme-text-secondary,#999)' } }, k + ':'),
+    h('span', { style: { flex: 1, color: 'var(--theme-text,#ddd)', wordBreak: 'break-all' } }, v))
+
+  return h('div', { style: { fontFamily: 'ui-monospace,monospace', fontSize: 12, lineHeight: 1.6, padding: '4px 2px', maxWidth: 640 } },
+    h('h3', { style: { margin: '0 0 10px', fontSize: 13 } }, '峰时拦截（dsh-no-white-rice-allowed）'),
+    h('div', { style: { border: '1px solid var(--theme-border,#333)', borderRadius: 8, padding: '10px 12px' } },
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, cursor: 'pointer', userSelect: 'none' } },
+        h('input', { type: 'checkbox', checked: snap?.enabled === true, disabled: saving, onChange: onToggle, style: { width: 16, height: 16, accentColor: '#e5484d', cursor: 'pointer' } }),
+        h('span', { style: { fontWeight: 600, color: 'var(--theme-text,#ddd)' } }, '启用峰时拦截（关闭：全时段不生效）'),
+        saving ? h('span', { style: { fontSize: 11, color: 'var(--theme-text-secondary,#999)' } }, '保存中…') : null,
+      ),
+      rows.map(([k, v]) => row(k, v)),
+    ),
+  )
 }
 
 export const inject = ['slots']
 
 export function apply(ctx: ClientContext): void {
-  // 设置页面板
+  // ═══ 对话框右上角指示器（仅 DeepSeek 官方模型显示；React 组件经 slots 渲染）═══
+  ctx.effect(() => ctx.slots.inject('conversation.input.right', () =>
+    ctx.slots.register({
+      name: 'conversation.input.right',
+      id: '@dsh-external/dsh-no-white-rice-allowed-badge',
+      order: 70,
+      label: () => '白饭指示器',
+    }, BadgeComponent),
+  ), 'no-white-rice: input badge')
+
+  // ═══ 设置页面板（React 组件）═══
   ctx.effect(() => ctx.slots.inject('settings.section', () =>
     ctx.slots.register({
       name: 'settings.section',
       id: '@dsh-external/dsh-no-white-rice-allowed-status',
       order: 60,
       label: () => '白饭禁令',
-      component: () => ({
-        render() {
-          const page = document.createElement('div')
-          page.style.cssText = 'font-family:ui-monospace,monospace;font-size:12px;line-height:1.6;padding:4px 2px;max-width:640px'
-          const title = document.createElement('h3')
-          title.textContent = '峰时拦截（dsh-no-white-rice-allowed）'
-          title.style.cssText = 'margin:0 0 10px;font-size:13px'
-          const panel = document.createElement('div')
-          panel.style.cssText = 'border:1px solid var(--theme-border,#333);border-radius:8px;padding:10px 12px'
-          page.append(title, panel)
-          return { dispose: renderStatusPanel(panel) }
-        },
-      }),
-    }),
+    }, StatusPanel),
   ), 'no-white-rice: settings page')
 
-  // 弹窗轮询
-  void poll()
-  const timer = window.setInterval(poll, POLL_MS)
-  ctx.effect(() => () => window.clearInterval(timer), 'no-white-rice: poll')
+  // ═══ 弹窗轮询（纯 DOM，全局）═══
+  ctx.effect(() => startToastPoll(), 'no-white-rice: toast poll')
 }

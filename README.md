@@ -13,6 +13,10 @@ chat/completions）发起大模型请求之前，检测请求时刻的**北京�
 
 - **周末（周六、周日）全天谷价，自动放行**（不拦截）
 - 设置页「白饭禁令」面板提供**总开关**：关闭时全时段不生效（运行时生效并持久化，重启保持）
+- 对话框右上角**状态指示器**（仅当使用 DeepSeek 官方来源模型时显示）：
+  - DeepSeek 图标 + 文本，整体右对齐
+  - 被阻止时：**现在是：梁文峰！**（梁文峰标红）
+  - 放行时：**现在是：梁文谷！**（蓝色）
 
 ⚠️ **峰时内安装后立即生效**：工作日若处于峰时（北京时间 9:00-12:00、14:00-18:00），
 安装完成后的所有 DeepSeek 请求都会被拦截（包括你自己发消息），12:00 / 18:00 后
@@ -110,8 +114,10 @@ curl http://127.0.0.1:3080/no-white-rice/api/status
 | Host 拦截 | 监听 `llm/stream` waterfall 事件（`ctx.waterfall(..., 'llm/stream', options, () => adapterStream(...))`）。监听器抛错即中断整条请求链，且发生在任何 HTTP 请求发出之前——覆盖主会话、子代理、goal 循环等全部调用路径。 |
 | 峰时判定 | `Date.now() + 8h` 取 UTC 字段换算北京时间（UTC+8），窗口 `[start, end)` 含起点不含终点。 |
 | 工作日判定 | 同一北京时间计算星期几（`getUTCDay()`，0=周日…6=周六），仅工作日（周一至周五）拦截；周末全天谷价放行。 |
-| 状态路由 | `GET /no-white-rice/api/status` 返回 `{ ok, enabled, message, weekdaysOnly, peak, weekday, dayOfWeek, isBusy, beijingTime, peaks, blockedCount, blocked }`。 |
+| 状态路由 | `GET /no-white-rice/api/status` 返回 `{ ok, enabled, message, weekdaysOnly, peak, weekday, dayOfWeek, isBusy, beijingTime, peaks, blockedCount, blocked, lastRoute }`；`lastRoute` 记录最近一次请求的 provider/model（指示器据此判定 DeepSeek 官方来源）。 |
+| 图标路由 | `GET /no-white-rice/api/icon` 返回插件 `media/deepseek.svg`（client 指示器图标）。 |
 | 设置路由 | `POST /no-white-rice/api/settings`（JSON `{ enabled }`）运行时开/关拦截，持久化到 `<DSH_HOME>/super-injector/dsh-no-white-rice-allowed.json`。 |
+| Client 指示器 | `conversation.input.right` 注入（React 组件、createElement）：DeepSeek 图标 + 「现在是：梁文峰！/梁文谷！」文本，仅 `lastRoute.provider === 'deepseek-official'` 时显示；梁文峰标红。 |
 | Client 弹窗 | 每 2s 轮询状态路由，发现新的拦截记录即弹出红色错误 toast（8s 自动消失，可点击关闭）。 |
 | 设置面板 | 设置页「白饭禁令」面板：启用/关闭开关 + 实时状态（北京时间/星期、生效范围、峰时窗口、拦截次数、最近拦截、提示文案）。 |
 

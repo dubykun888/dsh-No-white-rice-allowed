@@ -8,6 +8,7 @@
   "types": "./lib/types/index.d.ts",
   "files": [
     "lib",
+    "media",
     "cordis.patch.yml",
     "scripts/build.sh"
   ],

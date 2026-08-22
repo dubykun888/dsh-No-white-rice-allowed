@@ -11,7 +11,10 @@
  *  - `llm/stream` 是 dsh-llm 的 waterfall 事件，监听器抛错即中断整条请求链，
  *    且发生在任何 HTTP 请求发出之前——覆盖主会话、子代理、goal 循环等全部调用路径。
  *  - 拦截记录保存在内存中，并通过 webServer 路由 `/no-white-rice/api/*` 暴露：
- *    `GET /status` 返回状态；`POST /settings` 运行时开/关拦截并持久化。
+ *    `GET /status` 返回状态；`POST /settings` 运行时开/关拦截并持久化；
+ *    `GET /icon` 返回插件 media 的 DeepSeek 图标（client 指示器用）。
+ *  - 每次请求经 `llm/stream` 时记录最近路由 provider/model（无论是否拦截），
+ *    供 client 指示器判定"当前是否使用 DeepSeek 官方来源的模型"。
  *  - 设置档（enabled）持久化到 <DSH_HOME>/super-injector/dsh-no-white-rice-allowed.json，
  *    重启后保持；config 提供初值。依赖策略与 dsh-mode-boost 一致：仅 node 内置模块，
  *    不 import cordis / schemastery / dsh-llm（规避运行时模块解析风险）。
@@ -118,10 +121,15 @@ export function apply(ctx: AppContext, config: unknown): void {
   /** 最近一次拦截记录（client 端据此弹窗）。 */
   let lastBlocked: { at: number; message: string; beijingTime: string } | null = null
   let blockedCount = 0
+  /** 最近一次 llm/stream 请求的实际路由（拦/放都记录；client 指示器判定 deepseek 官方来源）。 */
+  let lastRoute: { provider: string; model: string; at: number } | null = null
 
   // ═══ 核心拦截点：llm/stream waterfall ═══
   // 监听器签名 (value, next)：不调用 next 或抛错即中断请求链（请求不会发出）。
   ctx.on('llm/stream', (options: any, next: any) => {
+    if (typeof options?.provider === 'string') {
+      lastRoute = { provider: options.provider, model: String(options?.model ?? ''), at: Date.now() }
+    }
     const now = beijingNow()
     const shouldBlock = enabled && (!weekdaysOnly || now.isWeekday) && inPeak(now.minutes, peaks)
     if (shouldBlock) {
@@ -135,6 +143,8 @@ export function apply(ctx: AppContext, config: unknown): void {
   })
 
   // ═══ 状态 + 设置路由：client 端轮询弹窗 / 运行开关 ═══
+  /** 插件 media 的 DeepSeek 图标（读一次缓存；来自 media/deepseek.svg）。 */
+  let iconSvg: string | null = null
   const disposeRoute = ctx.webServer.register({
     kind: 'prefix',
     path: API_PREFIX,
@@ -160,6 +170,25 @@ export function apply(ctx: AppContext, config: unknown): void {
         return
       }
 
+      // GET /icon —— DeepSeek 图标（client 指示器；内容来自插件 media/deepseek.svg）
+      if (pathname === `${API_PREFIX}/icon`) {
+        if (iconSvg === null) {
+          try {
+            iconSvg = readFileSync(new URL('../media/deepseek.svg', import.meta.url), 'utf8')
+          } catch {
+            iconSvg = ''
+          }
+        }
+        if (iconSvg.length === 0) {
+          res.writeHead(404)
+          res.end()
+          return
+        }
+        res.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'max-age=3600' })
+        res.end(iconSvg)
+        return
+      }
+
       // GET /status —— 状态查询
       if (pathname !== `${API_PREFIX}/status`) {
         res.writeHead(404)
@@ -180,6 +209,7 @@ export function apply(ctx: AppContext, config: unknown): void {
         peaks,
         blockedCount,
         blocked: lastBlocked,
+        lastRoute,
       }))
     },
   })
