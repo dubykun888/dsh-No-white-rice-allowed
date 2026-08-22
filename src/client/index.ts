@@ -142,30 +142,43 @@ async function fetchStatusShared(force = false): Promise<any | null> {
   return cachedStatus
 }
 
-/** ═══ 对话框右上角指示器：仅 DeepSeek 官方模型时显示；图标+文本整体右对齐 ═══ */
-function BadgeComponent() {
-  const [snap, setSnap] = useState<any>(cachedStatus)
+/** ═══ 对话框右上角指示器：仅 DeepSeek 官方模型时显示；图标+文本整体右对齐 ═══
+ *  显示条件优先用"当前选定模型"的 provider（props.directory，来自 modelDirectories）——
+ *  用户切换模型到非 DeepSeek 供应商时立即隐藏（不再依赖"最近一次请求"的 lastRoute）。 */
+function BadgeComponent(props: any) {
+  const directory = props?.directory
+  const [state, setState] = useState<any>(() => ({
+    currentProvider: directory?.store?.getSnapshot()?.current?.provider ?? null,
+    busy: false,
+    lastProvider: null,
+  }))
   useEffect(() => {
     let alive = true
     const poll = (): void => {
+      // 当前选定模型 provider（快照，切换模型即时更新）
+      const currentProvider = directory?.store?.getSnapshot()?.current?.provider ?? null
       void fetchStatusShared(true).then((d) => {
         if (!alive) return
-        setSnap((old: any) => (d !== null ? d : old))
+        setState({
+          currentProvider,
+          busy: d?.isBusy === true,
+          lastProvider: d?.lastRoute?.provider ?? null,
+        })
       })
     }
     poll()
-    const timer = window.setInterval(poll, 1200)
+    const timer = window.setInterval(poll, 1000)
     return () => {
       alive = false
       window.clearInterval(timer)
     }
-  }, [])
-  // 状态未加载（snap === null）时也显示（首包 1.5s 内到达后精确控制）；
-  // 已加载但非 DeepSeek 官方来源 → 隐藏。
-  const visible = snap === null || (snap?.ok === true && snap?.lastRoute?.provider === 'deepseek-official')
+  }, [directory])
+  // provider 优先级：当前选定模型 > 最近一次请求。仅 deepseek-official 显示。
+  const provider = state.currentProvider ?? state.lastProvider
+  const visible = provider === 'deepseek-official'
   if (!visible) return null
-  const busy = snap?.isBusy === true
-  const hint = snap?.ok === true ? `model=${snap.lastRoute?.model ?? '?'} isBusy=${snap.isBusy ?? '?'} weekday=${snap.weekday ?? '?'}` : 'status-loading'
+  const busy = state.busy
+  const hint = `current-provider=${state.currentProvider ?? '?'} last-provider=${state.lastProvider ?? '?'} model=${directory?.store?.getSnapshot()?.current?.model ?? '?'} isBusy=${busy}`
   return h('div', {
     style: {
       display: 'flex', alignItems: 'center', gap: 5,
@@ -249,17 +262,24 @@ function StatusPanel() {
 
 export const inject = ['slots']
 
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: any): void {
   // 预取状态：组件挂载前即有快照（指示器无首包等待）
   void fetchStatusShared(true)
 
   // ═══ 对话框右上角指示器（仅 DeepSeek 官方模型显示；React 组件经 slots 渲染）═══
+  // 优先用「当前选定模型」的 provider（modelDirectories 服务，切换模型即时隐藏）；
+  // 服务缺失时回退到最近一次请求的 lastRoute（host status）。
   ctx.effect(() => ctx.slots.inject('conversation.input.right', () =>
     ctx.slots.register({
       name: 'conversation.input.right',
       id: '@dsh-external/dsh-no-white-rice-allowed-badge',
       order: 70,
       label: () => '白饭指示器',
+      inject: (sessionId: string) => {
+        const models = ctx.get?.('modelDirectories')
+        const directory = models?.directoryFor?.(sessionId) ?? null
+        return { directory }
+      },
     }, BadgeComponent),
   ), 'no-white-rice: input badge')
 
